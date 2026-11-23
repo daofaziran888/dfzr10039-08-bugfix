@@ -29,3 +29,5 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+    # 动作参数：如调度触发的「时段」「触发方式」、采集认领的「认领人」等。
+    params: dict[str, Any] = Field(default_factory=dict)

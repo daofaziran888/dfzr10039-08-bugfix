@@ -466,13 +466,22 @@ def compute_crawl_cost(job: CrawlJobSpec, proxy: ProxyNode | None) -> CostRecord
 # ---------------------------------------------------------------------------
 
 def schedule_job(job: CrawlJobSpec) -> SchedulePlan | None:
-    """为采集作业创建调度计划。"""
-    # 找关联的调度计划
+    """为采集作业创建调度计划，并把状态回写到调度计划与作业台账行。
+
+    修复点：旧实现只在内存对象上改状态，重新读取计划仍停留在草稿/待激活；
+    现在状态流转同步落回 store 行，关联采集作业的状态也一并回写作业台账。
+    """
+    now = datetime.now(timezone.utc).isoformat()
     for row in store.rows("scheduler"):
         if str(row.get("关联作业")) == job.job_id:
             plan = SchedulePlan.from_seed_row(row)
-            plan.next_run = datetime.now(timezone.utc).isoformat()
+            plan.next_run = now
             plan.status = "执行中" if job.status in ("待执行", "采集执行") else "已完成"
+            # 状态回写：避免“编排显示执行中、重新读取仍是草稿”
+            row["status"] = plan.status
+            row["下次执行"] = plan.next_run
+            row["pending"] = plan.status not in ("已完成", "已停用")
+            _sync_job_ledger(job)
             return plan
 
     # 创建新的调度计划
@@ -480,11 +489,20 @@ def schedule_job(job: CrawlJobSpec) -> SchedulePlan | None:
         plan_id=f"SCHED-{job.job_id}",
         linked_job_id=job.job_id,
         cron_expr="0 */6 * * *",  # 每6小时
-        next_run=datetime.now(timezone.utc).isoformat(),
+        next_run=now,
         status="执行中" if job.status in ("待执行", "采集执行") else "已完成",
     )
     _persist_schedule(plan)
+    _sync_job_ledger(job)
     return plan
+
+
+def _sync_job_ledger(job: CrawlJobSpec) -> None:
+    """把关联采集作业的状态回写到 crawl_job 作业台账行。"""
+    for row in store.rows("crawl_job"):
+        if str(row.get("作业编号")) == job.job_id:
+            row["status"] = job.status
+            row["pending"] = job.status not in ("已完成", "部分失败")
 
 
 # ---------------------------------------------------------------------------

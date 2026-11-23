@@ -4,9 +4,14 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from app.seed import SEED_ROWS
+
+# 跨模块状态流转的共享锁：调度触发/确认与采集任务认领/写回都要在
+# “查找-判断-写入”这一段上互斥，保证同一时段并发触发只生效一次。
+store_lock = threading.RLock()
 
 
 class Store:
